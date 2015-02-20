@@ -18,7 +18,9 @@
 #include <SoftwareSerial.h>
 #include "Akeru.h"
 #include <stdlib.h>
-#include <SD.h>
+#include <SdFat.h>
+
+SdFat SD;
 
 struct sigfoxData {
   float lat;
@@ -32,7 +34,6 @@ struct sigfoxData {
 #define DEEPSLEEPTIME 600 // sec
 #define LOOKUPTIME 120 // sec
 
-int led = 13; // Debug built-in led to signal activity
 int gpsPowerPin = 8;
 int sdPin = 10;
 int fixPin = 7;
@@ -46,13 +47,11 @@ uint32_t timer = millis();
 uint32_t fixTimer = millis();
 uint32_t lookupTimer = millis();
 
+SdFile logfile;
 SoftwareSerial mySerial(3, 2);
 Adafruit_GPS GPS(&mySerial);
 
-
-
 void useInterrupt(boolean); // Func prototype keeps Arduino 0023 happy
-
 void setup()  
 {
     
@@ -65,26 +64,23 @@ void setup()
   // also spit it out
   Serial.begin(9600);
  // Serial.println("BAdafruit GPS library basic test wat !");
-  Serial.println(freeRam());
-
-  Serial.print("I");
+  Serial.print("Setup");
   // make sure that the default chip select pin is set to
   // output, even if you don't use it:
   pinMode(sdPin, OUTPUT);
   
   // see if the card is present and can be initialized:
   Serial.flush();
-  /*
-  
   if (!SD.begin(sdPin)) {
     Serial.println("Card failed, or not present");
     Serial.flush();
-    return;
     // don't do anything more:
+  } else {
+    Serial.println("Card found !");
   }
   
-  */
-
+  //logfile.open("bulb.log", O_RDWR);
+  Serial.println("Starting up");
 
   pinMode(fixPin, INPUT);
   pinMode(gpsPowerPin, OUTPUT);
@@ -108,7 +104,7 @@ void setup()
   // Ask for firmware version
   mySerial.println(PMTK_Q_RELEASE);
   fixTimer = millis();
-  Serial.println("S");
+  Serial.println("Setup done");
 }
 
 // Interrupt is called once a millisecond, looks for any new GPS data, and stores it
@@ -171,8 +167,8 @@ void loop()                     // run over and over again
   
   if (hardwareFix && !toggleHardwareFix) {
     
-    Serial.println("Got Fix");
-    
+//    Serial.println("Got Fix");
+    Serial.println("Got hardware Fix, starting up GPS communication");
     GPS.begin(9600);
   
     GPS.sendCommand(PMTK_SET_NMEA_OUTPUT_RMCGGA);
@@ -180,9 +176,6 @@ void loop()                     // run over and over again
     GPS.sendCommand(PGCMD_NOANTENNA);
     
     useInterrupt(true);
-  
-    // Wait 1 second for the modem to warm
-    delay(1000);
     
     Akeru.begin();
     
@@ -206,14 +199,24 @@ void loop()                     // run over and over again
       return;  // we can fail to parse a sentence in which case we should just wait for another
     
     newSentence = true;
-    Serial.println("Parsed Sentence");
+    Serial.println("Parsed GPS Sentence");
   }
   
   
   if ((millis() - lookupTimer) / 1000 >= LOOKUPTIME) {
     Serial.print("No fix for ");
     Serial.print(LOOKUPTIME);
-    Serial.print(" sec, sleeping. ");
+    Serial.print(" sec, sending default data and sleeping.");
+    Serial.println(" ");
+    
+    data.lat = 0;
+    data.lon = 0;
+    data.alt = 0;
+    
+    if (Akeru.isReady()) {
+      Akeru.send(&data, sizeof(data));
+      delay(1000);
+    }
     
     deepSleep();
   }
@@ -236,24 +239,7 @@ void loop()                     // run over and over again
     return;
   }
   
-  Serial.println("Fix found ! Proceed");
-
-  Serial.print("\nTime: ");
-  Serial.print(GPS.hour, DEC); Serial.print(':');
-  Serial.print(GPS.minute, DEC); Serial.print(':');
-  Serial.print(GPS.seconds, DEC); Serial.print('.');
-  Serial.println(GPS.milliseconds);
-  Serial.print("Date: ");
-  Serial.print(GPS.day, DEC); Serial.print('/');
-  Serial.print(GPS.month, DEC); Serial.print("/20");
-  Serial.println(GPS.year, DEC);
-  
-  
-  Serial.print("Location (in degrees, works with Google Maps): ");
-  Serial.print(GPS.latitudeDegrees);
-  Serial.print(", "); 
-  Serial.println(GPS.longitudeDegrees);
-  Serial.print("Altitude: "); Serial.println(GPS.altitude);
+  Serial.println("Software Fix !");
   
   data.lat = GPS.latitudeDegrees;
   data.lon = GPS.longitudeDegrees;
@@ -261,13 +247,9 @@ void loop()                     // run over and over again
   
   if (Akeru.isReady() && data.lat != 0 && data.lon != 0 && newSentence) {
     
-    digitalWrite(led, HIGH);
-    
     Serial.println("Sending data ...");
     Akeru.send(&data, sizeof(data));
     newSentence = false;
-    
-    digitalWrite(led, LOW);
     
     Serial.println("Going to sleep ...");
     
